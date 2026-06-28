@@ -5,7 +5,7 @@ session state, git status, account usage, and context-window consumption onto a
 single line -- with a second line echoing your most recent message.
 
 ```
-claude-opus-4-7 | 🏷️ my-session | 📁 my-project | 🔀 main (2 files uncommitted, synced 5m ago) | 5h:34% (5p) 7d:12% | 18% of 1m tok
+claude-opus-4-7 | 🏷️ my-session | 📁 my-project | 🔀 main (2 files uncommitted, synced 5m ago) | 5h:34% (5p) 7d:12% | 180k of 1m tok
 💬 the last thing you typed shows up here
 ```
 
@@ -19,7 +19,7 @@ claude-opus-4-7 | 🏷️ my-session | 📁 my-project | 🔀 main (2 files unco
 | `🔀 main (...)` | Git branch, uncommitted file count (or the filename when exactly one), and upstream sync state with time since last fetch. Truncates to fit the terminal width. |
 | `5h:34% (5p)` | Rolling 5-hour usage and the local time it resets. A `(+$0.42)` appears when extra-usage charges have accrued in the current block. |
 | `7d:12%` | Rolling 7-day usage. |
-| `18% of 1m tok` | Context-window consumption, colored green/amber/red as it climbs. A leading `~` means it's an estimate (no transcript yet). |
+| `180k of 1m tok` | Context-window consumption as an absolute token count (rounded to thousands), against the window size. Colored green (<50%), amber (<85%), red (≥85%) as it climbs. A leading `~` means it's an estimate (no transcript yet). |
 | `💬 ...` | Your most recent message, on a second line. |
 
 ## Requirements

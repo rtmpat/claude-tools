@@ -4,7 +4,7 @@
 # Part of: github.com/RTMPAT/claude-tools (statusline/)
 #
 # Renders one status line:
-#   model | session | dir | git branch + status | usage % + resets + overage $ | context %
+#   model | session | dir | git branch + status | usage % + resets + overage $ | context tokens
 # plus a second line echoing your most recent message.
 #
 # Requirements: macOS, jq, curl, git. Install and customization: see README.md.
@@ -188,7 +188,8 @@ if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
         if . then
             (.message.usage.input_tokens // 0) +
             (.message.usage.cache_read_input_tokens // 0) +
-            (.message.usage.cache_creation_input_tokens // 0)
+            (.message.usage.cache_creation_input_tokens // 0) +
+            (.message.usage.output_tokens // 0)
         else 0 end
     ' < "$transcript_path")
 
@@ -206,17 +207,24 @@ fi
 
 [[ $pct -gt 100 ]] && pct=100
 
-# Glanceable threshold coloring on the percentage text: green <20%, yellow
-# <50%, red >=50%. Muted hues to match the rest of the palette.
-if [[ $pct -lt 20 ]]; then
+# Absolute used-token count in thousands (rounded) for display, e.g. "123k".
+# Falls back to the baseline estimate when no transcript tokens are available
+# (pct_prefix already carries the "~" estimate marker in that case).
+used_tokens=${context_length:-0}
+[[ "$used_tokens" -gt 0 ]] || used_tokens=$baseline
+used_label="$(( (used_tokens + 500) / 1000 ))k"
+
+# Glanceable threshold coloring on the token text: green <50%, yellow
+# <85%, red >=85% of the context window. Muted hues to match the palette.
+if [[ $pct -lt 50 ]]; then
     C_PCT='\033[38;5;71m'
-elif [[ $pct -lt 50 ]]; then
+elif [[ $pct -lt 85 ]]; then
     C_PCT='\033[38;5;179m'
 else
     C_PCT='\033[38;5;167m'
 fi
 
-ctx="${C_PCT}${pct_prefix}${pct}%${C_GRAY} of ${max_label} tok"
+ctx="${C_PCT}${pct_prefix}${used_label}${C_GRAY} of ${max_label} tok"
 
 # Fetch usage/quota (cached for 60s to avoid slowdowns).
 # Cache format (v3): "PCT_5H|PCT_7D|USED_CREDITS" — percentages + extra-usage
@@ -346,7 +354,7 @@ plain_fixed+=" | 📁 ${dir}"
 
 plain_tail=""
 [[ -n "$usage_text" ]] && plain_tail+=" | ${usage_text}"
-plain_tail+=" | ${pct_prefix}${pct}% of ${max_label} tok"
+plain_tail+=" | ${pct_prefix}${used_label} of ${max_label} tok"
 
 # Terminal width: prefer live $COLUMNS, fall back to tput, then a safe default.
 term_cols="${COLUMNS:-}"
@@ -390,7 +398,7 @@ if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
         [[ -n "$git_status" ]] && plain_output+=" ${git_status}"
     fi
     [[ -n "$usage_text" ]] && plain_output+=" | ${usage_text}"
-    plain_output+=" | ${pct_prefix}${pct}% of ${max_label} tok"
+    plain_output+=" | ${pct_prefix}${used_label} of ${max_label} tok"
     max_len=${#plain_output}
     last_user_msg=$(jq -rs '
         # Messages to skip (not useful as context)
