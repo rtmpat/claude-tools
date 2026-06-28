@@ -4,7 +4,7 @@
 # Part of: github.com/RTMPAT/claude-tools (statusline/)
 #
 # Renders one status line:
-#   model | session | dir | git branch + status | usage % + resets + overage $ | context %
+#   model | session | dir | git branch + status | usage % + resets + overage $ | context tokens
 # plus a second line echoing your most recent message.
 #
 # Requirements: macOS, jq, curl, git. Install and customization: see README.md.
@@ -40,8 +40,33 @@ input=$(cat)
 
 # Extract model, directory, cwd, session name, and rate-limit resets
 model=$(echo "$input" | jq -r '.model.display_name // .model.id // "?"')
+
+# Mode indicators shown right after the model name:
+#   effort level (e.g. "high"), then F if fast_mode is on (else _),
+#   then T if extended thinking is on (else _).
+effort_level=$(echo "$input" | jq -r '.effort.level // empty')
+[[ "$(echo "$input" | jq -r '.fast_mode // false')" == "true" ]] && fast_char="F" || fast_char="_"
+[[ "$(echo "$input" | jq -r '.thinking.enabled // false')" == "true" ]] && think_char="T" || think_char="_"
+mode_flags=""
+[[ -n "$effort_level" ]] && mode_flags+=" ${effort_level}"
+mode_flags+=" ${fast_char} ${think_char}"
+
+# Claude Code version, prepended to the second (last-message) line.
+version=$(echo "$input" | jq -r '.version // empty')
 cwd=$(echo "$input" | jq -r '.cwd // empty')
 dir=$(basename "$cwd" 2>/dev/null || echo "?")
+
+# Project root and the cwd expressed relative to it, for the second line.
+# When cwd IS the project root, show "."; if cwd is outside the project
+# (e.g. an added dir), fall back to the absolute cwd.
+project_dir=$(echo "$input" | jq -r '.workspace.project_dir // empty')
+if [[ -n "$project_dir" && "$cwd" == "$project_dir"* ]]; then
+    rel_cwd="${cwd#"$project_dir"}"
+    rel_cwd="${rel_cwd#/}"
+    [[ -z "$rel_cwd" ]] && rel_cwd="."
+else
+    rel_cwd="$cwd"
+fi
 session_name=$(echo "$input" | jq -r '.session_name // .session.name // .name // empty')
 reset_5h_raw=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 # used_percentage can exceed 100 when in overage — the gate for showing
@@ -155,12 +180,13 @@ if [[ -n "$cwd" && -d "$cwd" ]]; then
     fi
 fi
 
-# Get transcript path for context calculation and last message feature
+# Get transcript path (used only for the last-message echo at the bottom now).
 transcript_path=$(echo "$input" | jq -r '.transcript_path // empty')
 
-# Get context window size from JSON (accurate), but calculate tokens from transcript
-# (more accurate than total_input_tokens which excludes system prompt/tools/memory)
-# See: github.com/anthropics/claude-code/issues/13652
+# Context window size and current occupancy both come straight from stdin's
+# .context_window object (Claude Code computes these itself). current_usage's
+# cache_read_input_tokens already includes the cached system prompt, tools, and
+# memory, so this is accurate and needs no transcript parsing.
 max_context=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
 
 # Format context size: "1m" for >=1M (one-decimal if not exact), "Nk" otherwise.
@@ -179,26 +205,19 @@ fi
 # 20k baseline: system prompt + tools + memory + dynamic framing
 baseline=20000
 
-# Compute percentage from transcript (more accurate than total_input_tokens
-# which excludes system prompt/tools/memory). See claude-code issue #13652.
-if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
-    context_length=$(jq -s '
-        map(select(.message.usage and .isSidechain != true and .isApiErrorMessage != true)) |
-        last |
-        if . then
-            (.message.usage.input_tokens // 0) +
-            (.message.usage.cache_read_input_tokens // 0) +
-            (.message.usage.cache_creation_input_tokens // 0)
-        else 0 end
-    ' < "$transcript_path")
+# Current context occupancy = sum of all four current_usage token fields.
+# current_usage is null before the first API call and right after /compact;
+# in that case fall back to the baseline estimate (flagged with a "~").
+context_length=$(echo "$input" | jq -r '
+    .context_window.current_usage // {} |
+    ((.input_tokens // 0) + (.output_tokens // 0) +
+     (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))
+')
+context_length=${context_length:-0}
 
-    if [[ "$context_length" -gt 0 ]]; then
-        pct=$((context_length * 100 / max_context))
-        pct_prefix=""
-    else
-        pct=$((baseline * 100 / max_context))
-        pct_prefix="~"
-    fi
+if [[ "$context_length" -gt 0 ]]; then
+    pct=$((context_length * 100 / max_context))
+    pct_prefix=""
 else
     pct=$((baseline * 100 / max_context))
     pct_prefix="~"
@@ -206,17 +225,24 @@ fi
 
 [[ $pct -gt 100 ]] && pct=100
 
-# Glanceable threshold coloring on the percentage text: green <20%, yellow
-# <50%, red >=50%. Muted hues to match the rest of the palette.
-if [[ $pct -lt 20 ]]; then
+# Absolute used-token count in thousands (rounded) for display, e.g. "123k".
+# Falls back to the baseline estimate when no transcript tokens are available
+# (pct_prefix already carries the "~" estimate marker in that case).
+used_tokens=${context_length:-0}
+[[ "$used_tokens" -gt 0 ]] || used_tokens=$baseline
+used_label="$(( (used_tokens + 500) / 1000 ))k"
+
+# Glanceable threshold coloring on the token text: green <50%, yellow
+# <85%, red >=85% of the context window. Muted hues to match the palette.
+if [[ $pct -lt 50 ]]; then
     C_PCT='\033[38;5;71m'
-elif [[ $pct -lt 50 ]]; then
+elif [[ $pct -lt 85 ]]; then
     C_PCT='\033[38;5;179m'
 else
     C_PCT='\033[38;5;167m'
 fi
 
-ctx="${C_PCT}${pct_prefix}${pct}%${C_GRAY} of ${max_label} tok"
+ctx="${C_PCT}${pct_prefix}${used_label}${C_GRAY} of ${max_label} tok"
 
 # Fetch usage/quota (cached for 60s to avoid slowdowns).
 # Cache format (v3): "PCT_5H|PCT_7D|USED_CREDITS" — percentages + extra-usage
@@ -339,14 +365,13 @@ fi
 # from terminal width, and caps git_status to what is left. If the output
 # composition changes below, update plain_fixed/plain_tail to match so the
 # budget stays accurate.
-plain_fixed="${model}"
+plain_fixed="${model}${mode_flags}"
 [[ -n "$session_name" ]] && plain_fixed+=" | 🏷️ ${session_name}"
-plain_fixed+=" | 📁 ${dir}"
 [[ -n "$branch" ]] && plain_fixed+=" | 🔀 ${branch} "
 
 plain_tail=""
 [[ -n "$usage_text" ]] && plain_tail+=" | ${usage_text}"
-plain_tail+=" | ${pct_prefix}${pct}% of ${max_label} tok"
+plain_tail+=" | ${pct_prefix}${used_label} of ${max_label} tok"
 
 # Terminal width: prefer live $COLUMNS, fall back to tput, then a safe default.
 term_cols="${COLUMNS:-}"
@@ -366,10 +391,10 @@ if [[ -n "$branch" && ${#git_status} -gt $budget ]]; then
     fi
 fi
 
-# Build output: Model | SessionName | Dir | Branch (uncommitted) | Usage | Context
-output="${C_ACCENT}${model}${C_GRAY}"
+# Build output: Model | SessionName | Branch (uncommitted) | Usage | Context
+# (cwd moved to the second line, shown relative to the project root)
+output="${C_ACCENT}${model}${C_GRAY}${mode_flags}"
 [[ -n "$session_name" ]] && output+=" | 🏷️ ${session_name}"
-output+=" | 📁 ${dir}"
 if [[ -n "$branch" ]]; then
     output+=" | 🔀 ${branch}"
     [[ -n "$git_status" ]] && output+=" ${git_status}"
@@ -382,15 +407,14 @@ printf '%b\n' "$output"
 # Get user's last message (text only, not tool results, skip unhelpful messages)
 if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
     # Calculate visible length (without ANSI codes) - 10 chars for bar + content
-    plain_output="${model}"
+    plain_output="${model}${mode_flags}"
     [[ -n "$session_name" ]] && plain_output+=" | 🏷️ ${session_name}"
-    plain_output+=" | 📁 ${dir}"
     if [[ -n "$branch" ]]; then
         plain_output+=" | 🔀 ${branch}"
         [[ -n "$git_status" ]] && plain_output+=" ${git_status}"
     fi
     [[ -n "$usage_text" ]] && plain_output+=" | ${usage_text}"
-    plain_output+=" | ${pct_prefix}${pct}% of ${max_label} tok"
+    plain_output+=" | ${pct_prefix}${used_label} of ${max_label} tok"
     max_len=${#plain_output}
     last_user_msg=$(jq -rs '
         # Messages to skip (not useful as context)
@@ -412,10 +436,22 @@ if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
     ' < "$transcript_path" 2>/dev/null)
 
     if [[ -n "$last_user_msg" ]]; then
-        if [[ ${#last_user_msg} -gt $max_len ]]; then
-            echo "💬 ${last_user_msg:0:$((max_len - 3))}..."
+        # Second-line prefix: version | project_dir | cwd-relative-to-project
+        prefix_parts=()
+        [[ -n "$version" ]] && prefix_parts+=("$version")
+        [[ -n "$project_dir" ]] && prefix_parts+=("🏠 $project_dir")
+        prefix_parts+=("📍 $rel_cwd")
+        line2_prefix=""
+        for p in "${prefix_parts[@]}"; do
+            [[ -n "$line2_prefix" ]] && line2_prefix+=" | "
+            line2_prefix+="$p"
+        done
+        line2_prefix+=" | "
+        avail=$((max_len - ${#line2_prefix}))
+        if [[ $avail -gt 3 && ${#last_user_msg} -gt $avail ]]; then
+            echo "${line2_prefix}💬 ${last_user_msg:0:$((avail - 3))}..."
         else
-            echo "💬 ${last_user_msg}"
+            echo "${line2_prefix}💬 ${last_user_msg}"
         fi
     fi
 fi

@@ -2,25 +2,36 @@
 
 A status line for [Claude Code](https://claude.com/claude-code) that packs your
 session state, git status, account usage, and context-window consumption onto a
-single line -- with a second line echoing your most recent message.
+first line -- with a second line carrying the version, your project and working
+directories, and your most recent message.
 
 ```
-claude-opus-4-7 | 🏷️ my-session | 📁 my-project | 🔀 main (2 files uncommitted, synced 5m ago) | 5h:34% (5p) 7d:12% | 18% of 1m tok
-💬 the last thing you typed shows up here
+claude-opus-4-8 high _ T | 🏷️ my-session | 🔀 main (2 files uncommitted, synced 5m ago) | 5h:34% (5p) 7d:12% | 180k of 1m tok
+2.1.193 | 🏠 /Users/me/Work/Code | 📍 my-project/subdir | 💬 the last thing you typed shows up here
 ```
 
 ## What each segment shows
 
+### First line
+
 | Segment | Meaning |
 | --- | --- |
-| `claude-opus-4-7` | Active model (accent-colored). |
+| `claude-opus-4-8` | Active model (accent-colored). |
+| `high _ T` | Mode flags: reasoning effort level, then `F` if fast mode is on (else `_`), then `T` if extended thinking is on (else `_`). |
 | `🏷️ my-session` | Session name (omitted if unnamed). |
-| `📁 my-project` | Current working directory (basename). |
 | `🔀 main (...)` | Git branch, uncommitted file count (or the filename when exactly one), and upstream sync state with time since last fetch. Truncates to fit the terminal width. |
 | `5h:34% (5p)` | Rolling 5-hour usage and the local time it resets. A `(+$0.42)` appears when extra-usage charges have accrued in the current block. |
 | `7d:12%` | Rolling 7-day usage. |
-| `18% of 1m tok` | Context-window consumption, colored green/amber/red as it climbs. A leading `~` means it's an estimate (no transcript yet). |
-| `💬 ...` | Your most recent message, on a second line. |
+| `180k of 1m tok` | Context-window consumption as an absolute token count (rounded to thousands), against the window size. Computed from `context_window.current_usage` (all four token fields). Colored green (<50%), amber (<85%), red (≥85%) as it climbs. A leading `~` means it's an estimate (no usage data yet). |
+
+### Second line
+
+| Segment | Meaning |
+| --- | --- |
+| `2.1.193` | Claude Code version. |
+| `🏠 /Users/me/Work/Code` | Project root (the workspace's `project_dir`). |
+| `📍 my-project/subdir` | Current working directory, shown relative to the project root (`.` when at the root). |
+| `💬 ...` | Your most recent message. |
 
 ## Requirements
 
