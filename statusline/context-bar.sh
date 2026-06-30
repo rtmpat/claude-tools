@@ -458,18 +458,24 @@ output+=" | ${ctx}${C_RESET}"
 
 printf '%b\n' "$output"
 
-# Get user's last message (text only, not tool results, skip unhelpful messages)
+# Second line: an always-on prefix (version | project | cwd | sandbox), with
+# the most recent user message appended when one exists. The prefix prints even
+# before the first prompt — only the trailing "💬 message" is gated on having a
+# message. Line-1 plain width drives truncation of the message tail.
+plain_output="${model}${mode_flags}"
+[[ -n "$session_name" ]] && plain_output+=" | 🏷️ ${session_name}"
+if [[ -n "$branch" ]]; then
+    plain_output+=" | 🔀 ${branch}"
+    [[ -n "$git_status" ]] && plain_output+=" ${git_status}"
+fi
+[[ -n "$usage_text" ]] && plain_output+=" | ${usage_text}"
+plain_output+=" | ${pct_prefix}${used_label} of ${max_label} tok"
+max_len=${#plain_output}
+
+# Most recent user text message (empty before the first prompt, or if the
+# transcript has none). Skips tool results and interrupted/cancelled markers.
+last_user_msg=""
 if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
-    # Calculate visible length (without ANSI codes) - 10 chars for bar + content
-    plain_output="${model}${mode_flags}"
-    [[ -n "$session_name" ]] && plain_output+=" | 🏷️ ${session_name}"
-    if [[ -n "$branch" ]]; then
-        plain_output+=" | 🔀 ${branch}"
-        [[ -n "$git_status" ]] && plain_output+=" ${git_status}"
-    fi
-    [[ -n "$usage_text" ]] && plain_output+=" | ${usage_text}"
-    plain_output+=" | ${pct_prefix}${used_label} of ${max_label} tok"
-    max_len=${#plain_output}
     last_user_msg=$(jq -rs '
         # Messages to skip (not useful as context)
         def is_unhelpful:
@@ -488,25 +494,28 @@ if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
         map(select(is_unhelpful | not)) |
         first // ""
     ' < "$transcript_path" 2>/dev/null)
+fi
 
-    if [[ -n "$last_user_msg" ]]; then
-        # Second-line prefix: version | project_dir | cwd-relative-to-project
-        prefix_parts=()
-        [[ -n "$version" ]] && prefix_parts+=("$version")
-        [[ -n "$project_dir" ]] && prefix_parts+=("🏠 $project_dir")
-        prefix_parts+=("📍 $rel_cwd")
-        [[ -n "$sandbox_detail" ]] && prefix_parts+=("$sandbox_detail")
-        line2_prefix=""
-        for p in "${prefix_parts[@]}"; do
-            [[ -n "$line2_prefix" ]] && line2_prefix+=" | "
-            line2_prefix+="$p"
-        done
-        line2_prefix+=" | "
-        avail=$((max_len - ${#line2_prefix}))
-        if [[ $avail -gt 3 && ${#last_user_msg} -gt $avail ]]; then
-            echo "${line2_prefix}💬 ${last_user_msg:0:$((avail - 3))}..."
-        else
-            echo "${line2_prefix}💬 ${last_user_msg}"
-        fi
+# Build the always-on prefix: version | project_dir | cwd-relative | sandbox.
+prefix_parts=()
+[[ -n "$version" ]] && prefix_parts+=("$version")
+[[ -n "$project_dir" ]] && prefix_parts+=("🏠 $project_dir")
+prefix_parts+=("📍 $rel_cwd")
+[[ -n "$sandbox_detail" ]] && prefix_parts+=("$sandbox_detail")
+line2_prefix=""
+for p in "${prefix_parts[@]}"; do
+    [[ -n "$line2_prefix" ]] && line2_prefix+=" | "
+    line2_prefix+="$p"
+done
+
+if [[ -n "$last_user_msg" ]]; then
+    # Append the message, truncated to fit the line-1 width (" | " = 3 cols).
+    avail=$((max_len - ${#line2_prefix} - 3))
+    if [[ $avail -gt 3 && ${#last_user_msg} -gt $avail ]]; then
+        echo "${line2_prefix} | 💬 ${last_user_msg:0:$((avail - 3))}..."
+    else
+        echo "${line2_prefix} | 💬 ${last_user_msg}"
     fi
+else
+    echo "${line2_prefix}"
 fi
