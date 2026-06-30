@@ -4,8 +4,8 @@
 # Part of: github.com/RTMPAT/claude-tools (statusline/)
 #
 # Renders one status line:
-#   model | session | dir | git branch + status | usage % + resets + overage $ | context tokens
-# plus a second line echoing your most recent message.
+#   model | session | git branch + status | sandbox | usage % + resets + overage $ | context tokens
+# plus a second line: version | project root | cwd | sandbox details | your most recent message.
 #
 # Requirements: macOS, jq, curl, git. Install and customization: see README.md.
 
@@ -104,7 +104,7 @@ format_reset() {
 # which carries its own margin — it cannot reintroduce rendering corruption.
 dwidth() {
     local s="$1" w=${#1} rest g
-    for g in '📁' '🔀' '💬'; do
+    for g in '📁' '🔀' '💬' '🔒' '🔓'; do
         rest="$s"
         while [[ "$rest" == *"$g"* ]]; do
             rest="${rest#*"$g"}"
@@ -360,6 +360,60 @@ if [[ -n "$usage_raw" ]]; then
     usage_text="${parts[*]}"
 fi
 
+# ---------- Sandbox mode (derived from settings, NOT from stdin) ----------
+# Claude Code does not expose sandbox state on stdin, so resolve it the way the
+# app does: merge `sandbox.*` across settings scopes. Booleans take the
+# highest-precedence scope that sets the key; array policy (allowed domains,
+# writable paths) merges across all scopes. Precedence low→high (later wins):
+#   user (~/.claude) < project (.claude) < project-local < managed.
+# NOTE: this reflects the *configured* policy for the project, not a guarantee
+# about each command — individual Bash calls can opt out of the sandbox via
+# allowUnsandboxedCommands / dangerouslyDisableSandbox.
+sandbox_enabled=""
+sb_esc="" sb_auto="" sb_fail=""
+sb_net_count=0 sb_fs_count=0
+
+sb_files=("$HOME/.claude/settings.json")
+if [[ -n "$project_dir" ]]; then
+    sb_files+=("$project_dir/.claude/settings.json" "$project_dir/.claude/settings.local.json")
+fi
+for mgd in "/Library/Application Support/ClaudeCode/managed-settings.json" \
+           "/etc/claude-code/managed-settings.json"; do
+    [[ -f "$mgd" ]] && sb_files+=("$mgd")
+done
+
+for f in "${sb_files[@]}"; do
+    [[ -f "$f" ]] || continue
+    sb=$(jq -c '.sandbox // empty' "$f" 2>/dev/null)
+    [[ -z "$sb" || "$sb" == "null" ]] && continue
+    # Booleans: must use has() because jq's `//` treats an explicit `false`
+    # as absent, which would silently drop a deliberate disable.
+    v=$(jq -r 'if has("enabled") then .enabled else empty end' <<<"$sb" 2>/dev/null);                                  [[ -n "$v" ]] && sandbox_enabled="$v"
+    v=$(jq -r 'if has("allowUnsandboxedCommands") then .allowUnsandboxedCommands else empty end' <<<"$sb" 2>/dev/null); [[ -n "$v" ]] && sb_esc="$v"
+    v=$(jq -r 'if has("autoAllowBashIfSandboxed") then .autoAllowBashIfSandboxed else empty end' <<<"$sb" 2>/dev/null); [[ -n "$v" ]] && sb_auto="$v"
+    v=$(jq -r 'if has("failIfUnavailable") then .failIfUnavailable else empty end' <<<"$sb" 2>/dev/null);              [[ -n "$v" ]] && sb_fail="$v"
+    # Arrays: merge (sum counts) across every scope that contributes entries.
+    n=$(jq -r '[(.network.allowedDomains // []),(.allowedDomains // [])] | add | length' <<<"$sb" 2>/dev/null)
+    [[ "$n" =~ ^[0-9]+$ ]] && sb_net_count=$((sb_net_count + n))
+    n=$(jq -r '[(.filesystem.allowWrite // []),(.filesystem.allowRead // [])] | add | length' <<<"$sb" 2>/dev/null)
+    [[ "$n" =~ ^[0-9]+$ ]] && sb_fs_count=$((sb_fs_count + n))
+done
+
+# Line-2 sandbox detail only (no line-1 indicator). Enabled → policy breakdown;
+# explicitly-disabled → "sandbox disabled"; unset → omit (no clutter).
+sandbox_detail=""
+onoff() { [[ "$1" == "true" ]] && printf on || printf off; }
+if [[ "$sandbox_enabled" == "true" ]]; then
+    d_parts=("net:$([[ $sb_net_count -gt 0 ]] && echo "$sb_net_count" || echo none)")
+    d_parts+=("fs:$([[ $sb_fs_count -gt 0 ]] && echo "$sb_fs_count" || echo default)")
+    [[ -n "$sb_esc" ]]  && d_parts+=("esc:$(onoff "$sb_esc")")
+    [[ -n "$sb_auto" ]] && d_parts+=("auto:$(onoff "$sb_auto")")
+    [[ -n "$sb_fail" ]] && d_parts+=("fail:$(onoff "$sb_fail")")
+    sandbox_detail="🔒 ${d_parts[*]}"
+elif [[ "$sandbox_enabled" == "false" ]]; then
+    sandbox_detail="🔓 sandbox disabled"
+fi
+
 # ---------- Dynamic truncation of git_status to fit terminal width ----------
 # Reconstructs the visible-width equivalent of every OTHER segment, subtracts
 # from terminal width, and caps git_status to what is left. If the output
@@ -441,6 +495,7 @@ if [[ -n "$transcript_path" && -f "$transcript_path" ]]; then
         [[ -n "$version" ]] && prefix_parts+=("$version")
         [[ -n "$project_dir" ]] && prefix_parts+=("🏠 $project_dir")
         prefix_parts+=("📍 $rel_cwd")
+        [[ -n "$sandbox_detail" ]] && prefix_parts+=("$sandbox_detail")
         line2_prefix=""
         for p in "${prefix_parts[@]}"; do
             [[ -n "$line2_prefix" ]] && line2_prefix+=" | "

@@ -7,7 +7,7 @@ directories, and your most recent message.
 
 ```
 claude-opus-4-8 high _ T | 🏷️ my-session | 🔀 main (2 files uncommitted, synced 5m ago) | 5h:34% (5p) 7d:12% | 180k of 1m tok
-2.1.193 | 🏠 /Users/me/Work/Code | 📍 my-project/subdir | 💬 the last thing you typed shows up here
+2.1.193 | 🏠 /Users/me/Work/Code | 📍 my-project/subdir | 🔒 net:none fs:default esc:on auto:on | 💬 the last thing you typed shows up here
 ```
 
 ## What each segment shows
@@ -31,6 +31,7 @@ claude-opus-4-8 high _ T | 🏷️ my-session | 🔀 main (2 files uncommitted, 
 | `2.1.193` | Claude Code version. |
 | `🏠 /Users/me/Work/Code` | Project root (the workspace's `project_dir`). |
 | `📍 my-project/subdir` | Current working directory, shown relative to the project root (`.` when at the root). |
+| `🔒 net:none fs:default esc:on auto:on` | Sandbox policy detail (only when sandbox is configured). `net:` = allowed-domain count or `none`; `fs:` = custom writable-path count or `default`; `esc:` = `allowUnsandboxedCommands`; `auto:` = `autoAllowBashIfSandboxed`; `fail:` = `failIfUnavailable` (shown only when set). Disabled shows `🔓 sandbox disabled`. |
 | `💬 ...` | Your most recent message. |
 
 ## Requirements
@@ -92,6 +93,29 @@ bash ~/.claude/scripts/color-preview.sh
   current 5-hour block began. The block baseline is tracked in
   `~/.claude/block-state.json`, keyed by the block's reset timestamp, and re-snapshots
   automatically on rollover.
+
+## How sandbox detection works
+
+Claude Code does **not** include sandbox state in the status-line stdin JSON, so
+the script resolves it the same way the app does: it reads `sandbox.*` from each
+settings scope and merges them in precedence order (low → high, later wins):
+
+1. User — `~/.claude/settings.json`
+2. Project — `<project_dir>/.claude/settings.json`
+3. Project-local — `<project_dir>/.claude/settings.local.json`
+4. Managed — `/Library/Application Support/ClaudeCode/managed-settings.json`
+   (macOS) or `/etc/claude-code/managed-settings.json` (Linux)
+
+Booleans (`enabled`, `allowUnsandboxedCommands`, …) take the highest-precedence
+scope that sets them; array policy (`network.allowedDomains`,
+`filesystem.allowWrite`/`allowRead`) is summed across all scopes. `project_dir`
+comes from stdin, so the right project `.claude/` is always used.
+
+**Caveat:** this reflects the *configured* policy for the project, not a guarantee
+about every command. Individual Bash calls can still run outside the sandbox when
+`allowUnsandboxedCommands` is set or a command opts out explicitly — so read
+`🔒 sandbox` as "sandbox is on for this project," not "this exact command is
+sandboxed."
 
 ## Troubleshooting
 
