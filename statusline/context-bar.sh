@@ -104,7 +104,7 @@ format_reset() {
 # which carries its own margin — it cannot reintroduce rendering corruption.
 dwidth() {
     local s="$1" w=${#1} rest g
-    for g in '📁' '🔀' '💬' '🔒' '🔓'; do
+    for g in '📁' '🔀' '💬' '🔒' '🔓' '🏠' '📍'; do
         rest="$s"
         while [[ "$rest" == *"$g"* ]]; do
             rest="${rest#*"$g"}"
@@ -372,6 +372,9 @@ fi
 sandbox_enabled=""
 sb_esc="" sb_auto="" sb_fail=""
 sb_net_count=0 sb_fs_count=0
+# Accumulate the actual entries (not per-scope counts) so the same domain/path
+# configured in two scopes is de-duplicated below rather than double-counted.
+sb_net_items="" sb_fs_items=""
 
 sb_files=("$HOME/.claude/settings.json")
 if [[ -n "$project_dir" ]]; then
@@ -384,7 +387,13 @@ done
 
 for f in "${sb_files[@]}"; do
     [[ -f "$f" ]] || continue
-    sb=$(jq -c '.sandbox // empty' "$f" 2>/dev/null)
+    # Normalize to an object so the has()/field lookups below never error on a
+    # scalar. A boolean shorthand (`"sandbox": true`) becomes {enabled: <bool>};
+    # any other non-object value is skipped rather than silently breaking the
+    # whole scope (jq's has()/.network on a scalar errors into 2>/dev/null).
+    sb=$(jq -c 'if (.sandbox|type) == "boolean" then {enabled: .sandbox}
+                elif (.sandbox|type) == "object" then .sandbox
+                else empty end' "$f" 2>/dev/null)
     [[ -z "$sb" || "$sb" == "null" ]] && continue
     # Booleans: must use has() because jq's `//` treats an explicit `false`
     # as absent, which would silently drop a deliberate disable.
@@ -392,12 +401,16 @@ for f in "${sb_files[@]}"; do
     v=$(jq -r 'if has("allowUnsandboxedCommands") then .allowUnsandboxedCommands else empty end' <<<"$sb" 2>/dev/null); [[ -n "$v" ]] && sb_esc="$v"
     v=$(jq -r 'if has("autoAllowBashIfSandboxed") then .autoAllowBashIfSandboxed else empty end' <<<"$sb" 2>/dev/null); [[ -n "$v" ]] && sb_auto="$v"
     v=$(jq -r 'if has("failIfUnavailable") then .failIfUnavailable else empty end' <<<"$sb" 2>/dev/null);              [[ -n "$v" ]] && sb_fail="$v"
-    # Arrays: merge (sum counts) across every scope that contributes entries.
-    n=$(jq -r '[(.network.allowedDomains // []),(.allowedDomains // [])] | add | length' <<<"$sb" 2>/dev/null)
-    [[ "$n" =~ ^[0-9]+$ ]] && sb_net_count=$((sb_net_count + n))
-    n=$(jq -r '[(.filesystem.allowWrite // []),(.filesystem.allowRead // [])] | add | length' <<<"$sb" 2>/dev/null)
-    [[ "$n" =~ ^[0-9]+$ ]] && sb_fs_count=$((sb_fs_count + n))
+    # Arrays: collect entries across every scope; de-duplicated after the loop.
+    items=$(jq -r '[(.network.allowedDomains // []),(.allowedDomains // [])] | add | .[]' <<<"$sb" 2>/dev/null)
+    [[ -n "$items" ]] && sb_net_items+="${items}"$'\n'
+    items=$(jq -r '[(.filesystem.allowWrite // []),(.filesystem.allowRead // [])] | add | .[]' <<<"$sb" 2>/dev/null)
+    [[ -n "$items" ]] && sb_fs_items+="${items}"$'\n'
 done
+
+# Count distinct entries so a domain/path listed in multiple scopes counts once.
+[[ -n "$sb_net_items" ]] && sb_net_count=$(printf '%s\n' "$sb_net_items" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
+[[ -n "$sb_fs_items" ]] && sb_fs_count=$(printf '%s\n' "$sb_fs_items" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 
 # Line-2 sandbox detail only (no line-1 indicator). Enabled → policy breakdown;
 # explicitly-disabled → "sandbox disabled"; unset → omit (no clutter).
@@ -470,7 +483,9 @@ if [[ -n "$branch" ]]; then
 fi
 [[ -n "$usage_text" ]] && plain_output+=" | ${usage_text}"
 plain_output+=" | ${pct_prefix}${used_label} of ${max_label} tok"
-max_len=${#plain_output}
+# True display width (dwidth accounts for double-width emoji) so line 2 is
+# measured on the same footing as the line-2 prefix below.
+max_len=$(dwidth "$plain_output")
 
 # Most recent user text message (empty before the first prompt, or if the
 # transcript has none). Skips tool results and interrupted/cancelled markers.
@@ -510,7 +525,9 @@ done
 
 if [[ -n "$last_user_msg" ]]; then
     # Append the message, truncated to fit the line-1 width (" | " = 3 cols).
-    avail=$((max_len - ${#line2_prefix} - 3))
+    # Measure the prefix in display columns so double-width emoji (🏠 📍 🔒)
+    # aren't undercounted, which would under-truncate and wrap the line.
+    avail=$((max_len - $(dwidth "$line2_prefix") - 3))
     if [[ $avail -gt 3 && ${#last_user_msg} -gt $avail ]]; then
         echo "${line2_prefix} | 💬 ${last_user_msg:0:$((avail - 3))}..."
     else
