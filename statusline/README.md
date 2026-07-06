@@ -31,7 +31,7 @@ claude-opus-4-8 high _ T | 🏷️ my-session | 🔀 main (2 files uncommitted, 
 | `2.1.193` | Claude Code version. |
 | `🏠 /Users/me/Work/Code` | Project root (the workspace's `project_dir`). |
 | `📍 my-project/subdir` | Current working directory, shown relative to the project root (`.` when at the root). |
-| `🔒 net:none fs:default esc:on auto:on` | Sandbox policy detail (only when sandbox is configured). `net:` = allowed-domain count or `none`; `fs:` = custom writable-path count or `default`; `esc:` = `allowUnsandboxedCommands`; `auto:` = `autoAllowBashIfSandboxed`; `fail:` = `failIfUnavailable` (shown only when set). Disabled shows `🔓 sandbox disabled`. |
+| `🔒 net:none fs:default esc:on auto:on` | Sandbox policy detail. `net:` = allowed-domain count or `none`; `fs:` = custom writable-path count or `default`; `esc:` = `allowUnsandboxedCommands`; `auto:` = `autoAllowBashIfSandboxed`; `fail:` = `failIfUnavailable` (shown only when set). Anything other than `sandbox.enabled: true` — explicitly disabled *or* unconfigured — shows `🔓 sandbox disabled`. |
 | `💬 ...` | Your most recent message. |
 
 ## Requirements

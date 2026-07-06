@@ -412,8 +412,10 @@ done
 [[ -n "$sb_net_items" ]] && sb_net_count=$(printf '%s\n' "$sb_net_items" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 [[ -n "$sb_fs_items" ]] && sb_fs_count=$(printf '%s\n' "$sb_fs_items" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
 
-# Line-2 sandbox detail only (no line-1 indicator). Enabled → policy breakdown;
-# explicitly-disabled → "sandbox disabled"; unset → omit (no clutter).
+# Line-2 sandbox detail (no line-1 indicator). Enabled → policy breakdown;
+# anything else (explicitly disabled OR unset) → "sandbox disabled", so an
+# absent sandbox config reads the same as one turned off rather than being
+# silently omitted.
 sandbox_detail=""
 onoff() { [[ "$1" == "true" ]] && printf on || printf off; }
 if [[ "$sandbox_enabled" == "true" ]]; then
@@ -423,7 +425,7 @@ if [[ "$sandbox_enabled" == "true" ]]; then
     [[ -n "$sb_auto" ]] && d_parts+=("auto:$(onoff "$sb_auto")")
     [[ -n "$sb_fail" ]] && d_parts+=("fail:$(onoff "$sb_fail")")
     sandbox_detail="🔒 ${d_parts[*]}"
-elif [[ "$sandbox_enabled" == "false" ]]; then
+else
     sandbox_detail="🔓 sandbox disabled"
 fi
 
