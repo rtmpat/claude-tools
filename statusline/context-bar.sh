@@ -421,7 +421,9 @@ onoff() { [[ "$1" == "true" ]] && printf on || printf off; }
 if [[ "$sandbox_enabled" == "true" ]]; then
     d_parts=("net:$([[ $sb_net_count -gt 0 ]] && echo "$sb_net_count" || echo none)")
     d_parts+=("fs:$([[ $sb_fs_count -gt 0 ]] && echo "$sb_fs_count" || echo default)")
-    [[ -n "$sb_esc" ]]  && d_parts+=("esc:$(onoff "$sb_esc")")
+    # esc: always shown (like net:/fs:) — allowUnsandboxedCommands defaults to
+    # true, so an unset value renders esc:on rather than being omitted.
+    d_parts+=("esc:$(onoff "${sb_esc:-true}")")
     [[ -n "$sb_auto" ]] && d_parts+=("auto:$(onoff "$sb_auto")")
     [[ -n "$sb_fail" ]] && d_parts+=("fail:$(onoff "$sb_fail")")
     sandbox_detail="🔒 ${d_parts[*]}"
